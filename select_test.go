@@ -81,7 +81,7 @@ func TestSelectBuilderFromSelectNestedDollarPlaceholders(t *testing.T) {
 		FromSelect(subQ, "subq").
 		Where(Lt{"c": 2}).
 		PlaceholderFormat(Dollar)
-	sql, args, err := b.ToSql()
+	sql, args, err := b.FinalizeSql()
 	assert.NoError(t, err)
 
 	expectedSql := "SELECT c FROM (SELECT c FROM t WHERE c > $1) AS subq WHERE c < $2"
@@ -99,16 +99,16 @@ func TestSelectBuilderToSqlErr(t *testing.T) {
 func TestSelectBuilderPlaceholders(t *testing.T) {
 	b := Select("test").Where("x = ? AND y = ?")
 
-	sql, _, _ := b.PlaceholderFormat(Question).ToSql()
+	sql, _, _ := b.PlaceholderFormat(Question).FinalizeSql()
 	assert.Equal(t, "SELECT test WHERE x = ? AND y = ?", sql)
 
-	sql, _, _ = b.PlaceholderFormat(Dollar).ToSql()
+	sql, _, _ = b.PlaceholderFormat(Dollar).FinalizeSql()
 	assert.Equal(t, "SELECT test WHERE x = $1 AND y = $2", sql)
 
-	sql, _, _ = b.PlaceholderFormat(Colon).ToSql()
+	sql, _, _ = b.PlaceholderFormat(Colon).FinalizeSql()
 	assert.Equal(t, "SELECT test WHERE x = :1 AND y = :2", sql)
 
-	sql, _, _ = b.PlaceholderFormat(AtP).ToSql()
+	sql, _, _ = b.PlaceholderFormat(AtP).FinalizeSql()
 	assert.Equal(t, "SELECT test WHERE x = @p1 AND y = @p2", sql)
 }
 
@@ -213,7 +213,7 @@ func TestSelectBuilderNestedSelectDollar(t *testing.T) {
 	nestedBuilder := StatementBuilder.PlaceholderFormat(Dollar).Select("*").Prefix("NOT EXISTS (").
 		From("bar").Where("y = ?", 42).Suffix(")")
 	outerSql, _, err := StatementBuilder.PlaceholderFormat(Dollar).Select("*").
-		From("foo").Where("x = ?").Where(nestedBuilder).ToSql()
+		From("foo").Where("x = ?").Where(nestedBuilder).FinalizeSql()
 
 	assert.NoError(t, err)
 	assert.Equal(t, "SELECT * FROM foo WHERE x = $1 AND NOT EXISTS ( SELECT * FROM bar WHERE y = $2 )", outerSql)
@@ -256,7 +256,7 @@ func TestSelectSubqueryPlaceholderNumbering(t *testing.T) {
 		FromSelect(subquery, "q").
 		Where("c = ?", 2).
 		PlaceholderFormat(Dollar).
-		ToSql()
+		FinalizeSql()
 	assert.NoError(t, err)
 
 	expectedSql := "WITH a AS ( SELECT a WHERE b = $1 ) SELECT * FROM (SELECT a WHERE b = $2) AS q WHERE c = $3"
@@ -271,7 +271,7 @@ func TestSelectSubqueryInConjunctionPlaceholderNumbering(t *testing.T) {
 		Where(Or{subquery}).
 		Where("c = ?", 2).
 		PlaceholderFormat(Dollar).
-		ToSql()
+		FinalizeSql()
 	assert.NoError(t, err)
 
 	expectedSql := "SELECT * WHERE (EXISTS( SELECT a WHERE b = $1 )) AND c = $2"
@@ -293,6 +293,15 @@ func TestTwoCTEs(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, "WITH cte AS (SELECT abc FROM def), cte2 AS (SELECT ghi FROM jkl) SELECT * FROM cte", sql)
+}
+
+func TestRenderingPlaceholderInCTEAndMainQuery(t *testing.T) {
+	cteBuilder := Select("*").From("users").Where("id = ?", 1).PlaceholderFormat(Dollar)
+	queryBuilder := Select("*").From("base").Where("name = ?", "John Doe").With("base", cteBuilder).PlaceholderFormat(Dollar)
+	sql, args, err := queryBuilder.FinalizeSql()
+	assert.NoError(t, err)
+	assert.Equal(t, "WITH base AS (SELECT * FROM users WHERE id = $1) SELECT * FROM base WHERE name = $2", sql)
+	assert.Equal(t, []interface{}{1, "John Doe"}, args)
 }
 
 func TestCTEErrorBubblesUp(t *testing.T) {
